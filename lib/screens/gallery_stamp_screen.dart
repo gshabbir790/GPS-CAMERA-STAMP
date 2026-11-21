@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -47,6 +48,7 @@ class _GalleryStampScreenState extends State<GalleryStampScreen> {
   StreamSubscription<QueueResult>? _sub;
 
   bool _saving = false;
+  bool _locating = false;
   String? _pendingOut; // جس تصویر کا نتیجہ ہم سن رہے ہیں
   String? _savedPath;
   String? _error;
@@ -134,7 +136,7 @@ class _GalleryStampScreenState extends State<GalleryStampScreen> {
 
   // ---------------- لوکیشن ----------------
   /// خانوں سے لوکیشن پڑھ کر لاگو کریں؛ غلط ہو تو false
-  bool _applyLocation({bool quiet = false}) {
+  bool _applyLocation({bool quiet = false, bool remember = true}) {
     final lat = double.tryParse(_latC.text.trim());
     final lon = double.tryParse(_lonC.text.trim());
     if (lat == null || lon == null || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
@@ -146,14 +148,51 @@ class _GalleryStampScreenState extends State<GalleryStampScreen> {
     loc.setMapType(s.mapType);
     loc.setManual(lat, lon, title: _titleC.text.trim(), address: _addrC.text.trim());
     // اگلی بار کے لیے یاد رکھیں (کیمرے کی دستی لوکیشن آن/آف کو نہیں چھیڑتے)
-    s.update(() {
-      s.mLat = lat;
-      s.mLon = lon;
-      s.mTitle = _titleC.text.trim();
-      s.mAddress = _addrC.text.trim();
-    });
+    if (remember) {
+      s.update(() {
+        s.mLat = lat;
+        s.mLon = lon;
+        s.mTitle = _titleC.text.trim();
+        s.mAddress = _addrC.text.trim();
+      });
+    }
     FocusScope.of(context).unfocus();
     return true;
+  }
+
+  /// موجودہ GPS سے لوکیشن خود لینا؛ نام اور پتہ انٹرنیٹ سے خود نکلتا ہے
+  Future<void> _fetchGps() async {
+    if (_locating || _saving) return;
+    setState(() => _locating = true);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _msg(S.t('Turn on phone location (GPS)', 'فون کی لوکیشن (GPS) آن کریں'));
+        return;
+      }
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        _msg(S.t('Allow location permission', 'لوکیشن کی اجازت دیں'));
+        return;
+      }
+      final p = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 25),
+        ),
+      );
+      _latC.text = p.latitude.toStringAsFixed(6);
+      _lonC.text = p.longitude.toStringAsFixed(6);
+      _titleC.clear();
+      _addrC.clear();
+      _applyLocation(remember: false);
+    } catch (e) {
+      _msg(S.t('GPS location not available yet', 'GPS لوکیشن ابھی نہیں ملی'));
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
   }
 
   /// نقشہ اور پتہ (انٹرنیٹ سے) آنے کا تھوڑا انتظار، زیادہ سے زیادہ 7 سیکنڈ
@@ -376,11 +415,27 @@ class _GalleryStampScreenState extends State<GalleryStampScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
               child: Column(children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    onPressed: (_saving || _locating) ? null : _fetchGps,
+                    icon: _locating
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.my_location),
+                    label: Text(_locating
+                        ? S.t('Getting location...', 'لوکیشن لی جا رہی ہے...')
+                        : S.t('Get location automatically (GPS)', 'لوکیشن خودکار لیں (GPS)')),
+                  ),
+                ),
+                const SizedBox(height: 4),
                 TextField(
                   controller: _titleC,
                   decoration: InputDecoration(
                     labelText: S.t('Place name', 'جگہ کا نام'),
-                    hintText: 'GHSS Waryam Wala, Punjab, Pakistan',
                   ),
                 ),
                 TextField(
